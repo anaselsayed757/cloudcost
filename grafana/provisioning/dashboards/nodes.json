@@ -1,0 +1,82 @@
+{
+  "title": "CloudCost — VM Metrics",
+  "uid": "cloudcost-vms",
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU Usage % per VM",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        "legendFormat": "{{instance}}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "RAM Usage % per VM",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+        "legendFormat": "{{instance}}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Network Receive bytes/sec",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "rate(node_network_receive_bytes_total{device=\"eth0\"}[5m])",
+        "legendFormat": "{{instance}}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "binBps",
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "CPU Usage — Current",
+      "type": "gauge",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+        "legendFormat": "{{instance}}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "thresholds": {
+            "steps": [
+              { "color": "green",  "value": 0  },
+              { "color": "yellow", "value": 50 },
+              { "color": "red",    "value": 80 }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "schemaVersion": 38,
+  "version": 1
+}
