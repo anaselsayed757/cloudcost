@@ -193,10 +193,7 @@ export default function App() {
                     r.fired > 0 ? "#ffaa00" : "#00aa55"))} />
               <ActionBtn theme={theme} label="Export CSV"
                 color="#1D9E75"
-                onClick={() => window.open(
-                  `${process.env.REACT_APP_API_URL ||
-                    "http://10.150.40.10:8000"}/billing/export`,
-                  "_blank")} />
+                onClick={() => window.open(api.exportCsvUrl(), "_blank")} />
               <ActionBtn theme={theme} label="Send Receipt"
                 color="#EF9F27"
                 onClick={() => {

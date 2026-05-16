@@ -1,8 +1,11 @@
 import os
 import logging
-import logging.config
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from app.api import metrics, billing, forecast, alerts, vms, auth
 from app.database import init_db
 from app.scheduler import start_scheduler
@@ -12,9 +15,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 
-app = FastAPI(title="CloudCost API", version="1.0.0")
+limiter = Limiter(key_func=get_remote_address)
 
-_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+app = FastAPI(title="CloudCost API", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+_origins_env    = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
 
 app.add_middleware(

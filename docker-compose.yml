@@ -41,9 +41,9 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER:     clouduser
-      POSTGRES_PASSWORD: cloudpass
-      POSTGRES_DB:       cloudcost
+      POSTGRES_USER:     ${POSTGRES_USER:-clouduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloudpass}
+      POSTGRES_DB:       ${POSTGRES_DB:-cloudcost}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -56,10 +56,16 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-clouduser}:${POSTGRES_PASSWORD:-cloudpass}@postgres:5432/${POSTGRES_DB:-cloudcost}
       - PROMETHEUS_URL=http://prometheus:9090
-      - DATABASE_URL=postgresql://clouduser:cloudpass@postgres:5432/cloudcost
-      - SMTP_HOST=mailhog
-      - SMTP_PORT=1025
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:3000}
+      - SMTP_HOST=${SMTP_HOST:-mailhog}
+      - SMTP_PORT=${SMTP_PORT:-1025}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-cloudcost2024}
     depends_on:
       - postgres
       - prometheus
@@ -72,8 +78,6 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-    environment:
-      - REACT_APP_API_URL=http://10.150.40.10:8000
     depends_on:
       - backend
     networks:
@@ -97,7 +101,7 @@ services:
       - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=cloudcost2024
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-cloudcost2024}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana_data:/var/lib/grafana

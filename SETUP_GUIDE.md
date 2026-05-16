@@ -1,796 +1,218 @@
-# CloudCost - Setup & Installation Guide
-
-## Table of Contents
-1. [Prerequisites](#prerequisites)
-2. [Installation](#installation)
-3. [Configuration](#configuration)
-4. [Initial Setup](#initial-setup)
-5. [Verification](#verification)
-6. [Troubleshooting](#troubleshooting)
-7. [Production Deployment](#production-deployment)
-8. [Backup & Recovery](#backup--recovery)
-
----
+# CloudCost — Setup & Installation Guide
 
 ## Prerequisites
 
-### System Requirements
+### System requirements
 - **OS**: Linux, macOS, or Windows with WSL2
-- **CPU**: 2 cores minimum (4 cores recommended)
-- **RAM**: 4GB minimum (8GB recommended)
-- **Disk**: 20GB free space (30GB for production)
-- **Network**: Internet access for downloading Docker images
+- **CPU**: 2 cores minimum
+- **RAM**: 4 GB minimum (8 GB recommended)
+- **Disk**: 10 GB free
 
-### Software Requirements
+### Required software
+- [Docker](https://docs.docker.com/get-docker/) 20.10+
+- [Docker Compose](https://docs.docker.com/compose/install/) 1.29+
 
-#### Required
-- **Docker**: Version 20.10+ ([Install Docker](https://docs.docker.com/get-docker/))
-- **Docker Compose**: Version 1.29+ ([Install Docker Compose](https://docs.docker.com/compose/install/))
-- **Git**: For cloning and version control ([Install Git](https://git-scm.com/))
-
-#### Optional (for development)
-- **Python**: 3.9+ (if developing backend locally)
-- **Node.js**: 16+ (if developing frontend locally)
-- **PostgreSQL Client**: For database management
-- **curl** or **Postman**: For API testing
-
-### Check Installed Versions
 ```bash
-# Check Docker
-docker --version
-# Expected: Docker version 20.10+
-
-# Check Docker Compose
-docker-compose --version
-# Expected: Docker Compose version 1.29+
-
-# Check Git
-git --version
-# Expected: git version 2.x+
+docker --version          # Docker version 20.10+
+docker compose version    # Docker Compose version 2.x
 ```
 
 ---
 
 ## Installation
 
-### Step 1: Clone Repository
-
+### 1. Clone the repository
 ```bash
-# Clone the CloudCost repository
-git clone https://github.com/your-org/cloudcost.git
+git clone <repo-url>
 cd cloudcost
-
-# Verify directory structure
-ls -la
 ```
 
-Expected structure:
-```
-cloudcost/
-├── backend/
-├── frontend/
-├── grafana/
-├── prometheus/
-├── docker-compose.yml
-├── README.md
-└── ...
-```
-
-### Step 2: Prepare Environment Variables
-
-Create `.env` file in the project root:
-
+### 2. Create the environment file
 ```bash
-# Create .env file
-cat > .env << 'EOF'
-# Database Configuration
-POSTGRES_USER=clouduser
-POSTGRES_PASSWORD=cloudpass
-POSTGRES_DB=cloudcost
-
-# Backend Configuration
-DATABASE_URL=postgresql://clouduser:cloudpass@postgres:5432/cloudcost
-PROMETHEUS_URL=http://prometheus:9090
-
-# SMTP Configuration (MailHog for development)
-SMTP_HOST=mailhog
-SMTP_PORT=1025
-SMTP_USER=test
-SMTP_PASSWORD=test
-
-# Grafana Configuration
-GF_SECURITY_ADMIN_USER=admin
-GF_SECURITY_ADMIN_PASSWORD=cloudcost2024
-
-# Frontend Configuration
-REACT_APP_API_URL=http://localhost:8000
-
-# JWT Configuration
-SECRET_KEY=your-secret-key-here-change-in-production
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION_HOURS=24
-EOF
-
-# Verify .env file
-cat .env
+cp .env.example .env
 ```
 
-### Step 3: Build Docker Images
-
+Open `.env` and set a strong `SECRET_KEY`:
 ```bash
-# Build all images
-docker-compose build
-
-# Build specific service
-docker-compose build backend
-docker-compose build frontend
+# Generate a secure key
+python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Monitor the build process. This may take 5-10 minutes depending on your internet speed.
+Paste the output as the `SECRET_KEY` value in `.env`. This is **required** — the backend will refuse to start without it.
 
-### Step 4: Start Services
+The other defaults in `.env` work for local development as-is (MailHog for email, clouduser/cloudpass for PostgreSQL).
 
+### 3. Build and start all services
 ```bash
-# Start all services in the background
-docker-compose up -d
-
-# Verify services are running
-docker-compose ps
-
-# Expected output:
-# NAME                COMMAND                  STATUS              PORTS
-# node-exporter       "/node_exporter ..."     Up 2 minutes        9100/tcp
-# prometheus          "/bin/prometheus ..."    Up 2 minutes        9090/tcp
-# postgres            "docker-entrypoint..."   Up 2 minutes        5432/tcp
-# backend             "uvicorn app.main..."    Up 2 minutes        8000/tcp
-# frontend            "nginx -g daemon off"    Up 2 minutes        3000/tcp
-# mailhog             "MailHog"                Up 2 minutes        1025/tcp, 8025/tcp
-# grafana             "/run.sh"                Up 2 minutes        3000/tcp→3001/tcp
+docker compose up -d --build
 ```
 
-### Step 5: Initialize Database
+This starts 7 services: node-exporter, prometheus, postgres, backend, frontend, mailhog, grafana.
 
+Verify they're all running:
 ```bash
-# Run database migrations
-docker-compose exec backend alembic upgrade head
-
-# Expected output:
-# INFO [alembic.runtime.migration] Context impl PostgresqlImpl()
-# INFO [alembic.runtime.migration] Will assume transactional DDL.
-# INFO [alembic.runtime.migration] Running upgrade 0 -> 1, Initial migration
+docker compose ps
 ```
 
----
+First start takes 3–5 minutes while images download and the backend installs Python dependencies.
 
-## Configuration
-
-### Environment Variables
-
-Key environment variables and their purposes:
-
-#### Database
+### 4. Bootstrap the admin account (first time only)
 ```bash
-POSTGRES_USER=clouduser              # PostgreSQL user
-POSTGRES_PASSWORD=cloudpass          # PostgreSQL password (change in production!)
-POSTGRES_DB=cloudcost                # Database name
-DATABASE_URL=postgresql://...        # Full connection string
+curl -X POST http://localhost:8000/auth/setup-admin
 ```
 
-#### Backend
+Expected response:
+```json
+{ "status": "admin created", "username": "admin" }
+```
+
+Default credentials: `admin` / `cloudcost2024` (set via `ADMIN_DEFAULT_PASSWORD` in `.env`).
+
+### 5. Seed default tariffs
 ```bash
-PROMETHEUS_URL=http://prometheus:9090    # Prometheus API endpoint
-SECRET_KEY=your-secret-key               # JWT signing key (CHANGE in production!)
-JWT_ALGORITHM=HS256                      # JWT algorithm
-JWT_EXPIRATION_HOURS=24                  # Token expiration
-```
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -d "username=admin&password=cloudcost2024" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-#### Email
-```bash
-SMTP_HOST=mailhog           # SMTP server (MailHog for dev)
-SMTP_PORT=1025              # SMTP port
-SMTP_USER=test              # SMTP username
-SMTP_PASSWORD=test          # SMTP password
-```
-
-#### Frontend
-```bash
-REACT_APP_API_URL=http://localhost:8000    # Backend API URL
-```
-
-#### Grafana
-```bash
-GF_SECURITY_ADMIN_USER=admin              # Grafana admin user
-GF_SECURITY_ADMIN_PASSWORD=cloudcost2024  # Grafana admin password (change in production!)
-```
-
-### Configuration Files
-
-#### docker-compose.yml
-Main orchestration file. Modify service configurations:
-- Port mappings
-- Environment variables
-- Volume mounts
-- Resource limits
-
-#### prometheus/prometheus.yml
-Prometheus scrape configuration:
-```yaml
-global:
-  scrape_interval: 15s           # Scrape every 15 seconds
-  evaluation_interval: 15s       # Evaluate rules every 15 seconds
-
-scrape_configs:
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['localhost:9100']
-```
-
-#### grafana/provisioning/
-Grafana dashboard and datasource definitions:
-- `datasources/prometheus.yml`: Prometheus data source config
-- `dashboards/dashboard.yml`: Dashboard definitions
-
-#### nginx.conf (Frontend)
-Nginx server configuration:
-- Port 3000 binding
-- React app serving
-- API proxy configuration (optional)
-
----
-
-## Initial Setup
-
-### Step 1: Access Application
-
-After services are running, access:
-
-**Frontend**: http://localhost:3000
-**Backend API**: http://localhost:8000
-**API Docs**: http://localhost:8000/docs
-**Prometheus**: http://localhost:9090
-**Grafana**: http://localhost:3001 (admin / cloudcost2024)
-**MailHog**: http://localhost:8025
-
-### Step 2: First Login
-
-1. Open http://localhost:3000 in browser
-2. Log in with:
-   - **Email**: admin@cloudcost.local
-   - **Password**: (check backend logs or docker compose output)
-
-```bash
-# Check backend logs for initial credentials
-docker-compose logs backend | grep -i password
-```
-
-### Step 3: Create Default Tariffs
-
-```bash
-# Access backend API documentation
-# Go to http://localhost:8000/docs
-
-# Use Swagger UI to create tariffs:
-# POST /billing/tariffs with:
-{
-  "id": "standard",
-  "name": "Standard Plan",
-  "cpu_rate_per_core_hour": 0.048,
-  "ram_rate_per_gb_hour": 0.006,
-  "network_rate_per_gb": 0.010
-}
-```
-
-Or using curl:
-
-```bash
-TOKEN="<your-jwt-token>"
-
-curl -X POST http://localhost:8000/billing/tariffs \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "standard",
-    "name": "Standard Plan",
-    "cpu_rate_per_core_hour": 0.048,
-    "ram_rate_per_gb_hour": 0.006,
-    "network_rate_per_gb": 0.010
-  }'
-```
-
-### Step 4: Add Virtual Machines
-
-1. Log in to Frontend
-2. Navigate to VM Management
-3. Add VMs with:
-   - Instance ID (e.g., vm-001)
-   - Label (human-readable name)
-   - CPU Cores
-   - RAM (GB)
-   - Owner Email
-   - Tariff
-
-### Step 5: Configure Budgets & Alerts
-
-1. Select VM from list
-2. Click "Set Budget"
-3. Enter monthly limit
-4. Set warning threshold (default: 80%)
-5. Set critical threshold (default: 95%)
-6. Enter owner email for notifications
-
-### Step 6: Trigger First Billing
-
-```bash
-TOKEN="<your-jwt-token>"
-
-curl -X POST http://localhost:8000/billing/run \
+curl -s -X POST http://localhost:8000/vms/seed \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### Step 7: View Dashboards
-
-Access Grafana (http://localhost:3001):
-1. Log in: admin / cloudcost2024
-2. Select pre-configured dashboard
-3. View cost metrics and trends
+### 6. Open the dashboard
+- **Frontend**: http://localhost:3000 — log in with `admin` / `cloudcost2024`
+- **API Docs (Swagger)**: http://localhost:8000/docs
+- **Prometheus**: http://localhost:9090
+- **Grafana**: http://localhost:3001 — log in with `admin` / `cloudcost2024`
+- **MailHog (email preview)**: http://localhost:8025
 
 ---
 
-## Verification
+## First use
 
-### Verify All Services Running
+### Run your first billing cycle
+In the dashboard, click **Run Billing Now** (admin button in the header area). This queries Prometheus for live CPU, RAM, and network metrics and creates cost records for all discovered VMs.
 
+Or via API:
 ```bash
-# Check service status
-docker-compose ps
-
-# Check service logs
-docker-compose logs -f
-
-# Tail specific service
-docker-compose logs -f backend
-docker-compose logs -f frontend
-docker-compose logs -f postgres
+curl -s -X POST http://localhost:8000/billing/run \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
-### Health Checks
+### Check alerts
+Click **Check Alerts** to scan for idle VMs. If any VM has CPU < 5%, RAM < 20%, and network < 10 KB/s for 2+ hours, a warning alert fires and an email is sent to the VM's `owner_email`.
 
-```bash
-# API Health
-curl http://localhost:8000/health
-# Expected: {"status": "ok"}
+---
 
-# Database Connection
-docker-compose exec postgres psql -U clouduser -d cloudcost -c "SELECT 1"
-# Expected: Output without errors
+## Environment variables reference
 
-# Prometheus API
-curl http://localhost:9090/api/v1/query?query=up
-# Expected: JSON response with metrics
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SECRET_KEY` | **Yes** | — | JWT signing key. Generate with `secrets.token_hex(32)` |
+| `POSTGRES_USER` | No | `clouduser` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | No | `cloudpass` | PostgreSQL password |
+| `POSTGRES_DB` | No | `cloudcost` | Database name |
+| `ALLOWED_ORIGINS` | No | `http://localhost:3000` | CORS whitelist (comma-separated) |
+| `DASHBOARD_URL` | No | `http://localhost:3000` | URL shown in alert emails |
+| `SMTP_HOST` | No | `mailhog` | SMTP server hostname |
+| `SMTP_PORT` | No | `1025` | SMTP port |
+| `SMTP_USER` | No | *(empty)* | SMTP username (blank = no auth) |
+| `SMTP_PASSWORD` | No | *(empty)* | SMTP password |
+| `ADMIN_DEFAULT_PASSWORD` | No | `cloudcost2024` | Initial admin password |
+| `GF_SECURITY_ADMIN_PASSWORD` | No | `cloudcost2024` | Grafana admin password |
 
-# Frontend
-curl -s http://localhost:3000 | head -20
-# Expected: HTML content
+### Production Gmail SMTP
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASSWORD=your_16_char_app_password
 ```
-
-### Test API Endpoints
-
-```bash
-# 1. Login
-curl -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@cloudcost.local","password":"password"}'
-
-# 2. Get VMs
-curl http://localhost:8000/vms/ \
-  -H "Authorization: Bearer <token>"
-
-# 3. Get Metrics
-curl http://localhost:8000/metrics/summary \
-  -H "Authorization: Bearer <token>"
-```
-
-### Check Database
-
-```bash
-# Connect to PostgreSQL
-docker-compose exec postgres psql -U clouduser -d cloudcost
-
-# List tables
-\dt
-
-# Check VMs table
-SELECT * FROM vms;
-
-# Exit
-\q
-```
-
-### View Application Logs
-
-```bash
-# All services
-docker-compose logs -f
-
-# Backend only (last 100 lines)
-docker-compose logs -f backend --tail=100
-
-# Frontend only
-docker-compose logs -f frontend
-
-# In real-time
-docker-compose logs -f --follow
-```
+Use a [Gmail App Password](https://support.google.com/accounts/answer/185833) — not your account password.
 
 ---
 
 ## Troubleshooting
 
-### Issue: Services won't start
-
-**Problem**: `docker-compose up` fails
-
-**Solutions**:
-```bash
-# Check Docker is running
-docker ps
-
-# Check .env file exists and is valid
-cat .env
-
-# Try building again
-docker-compose build --no-cache
-
-# Check available disk space
-df -h
-
-# Check port conflicts
-netstat -an | grep -E '3000|8000|5432|9090|3001'
+### Backend won't start
 ```
-
-### Issue: Database connection fails
-
-**Problem**: Backend can't connect to PostgreSQL
-
-**Solutions**:
-```bash
-# Check PostgreSQL is running
-docker-compose ps postgres
-
-# Check database exists
-docker-compose exec postgres psql -U clouduser -l | grep cloudcost
-
-# Check connection string in .env
-cat .env | grep DATABASE_URL
-
-# Recreate database
-docker-compose down -v
-docker-compose up -d postgres
-# Wait 10 seconds
-docker-compose exec postgres psql -U clouduser -c "CREATE DATABASE cloudcost"
+RuntimeError: SECRET_KEY environment variable must be set
 ```
+The `.env` file is missing or `SECRET_KEY` is empty. Copy `.env.example` to `.env` and set the key.
 
-### Issue: Frontend blank or not loading
+---
 
-**Problem**: Blank page or loading error
-
-**Solutions**:
+### Frontend shows blank page / API errors
+The frontend proxies all API calls through Nginx to the backend (`/api/*` → `backend:8000/*`). Check:
 ```bash
-# Check frontend is serving
-curl http://localhost:3000
-
-# Check backend API URL is correct
-docker-compose logs frontend | grep -i api
-
-# Verify backend is running
+docker compose logs backend --tail=50
+docker compose logs frontend --tail=20
 curl http://localhost:8000/health
-
-# Check browser console for errors (F12 in browser)
-
-# Rebuild frontend
-docker-compose build --no-cache frontend
-docker-compose restart frontend
-```
-
-### Issue: Metrics not showing
-
-**Problem**: No data in Prometheus or Grafana
-
-**Solutions**:
-```bash
-# Check Node Exporter is running
-curl http://localhost:9100/metrics
-
-# Check Prometheus is scraping
-# Open http://localhost:9090/targets
-
-# Check Prometheus config
-cat prometheus/prometheus.yml
-
-# Wait for data collection (at least 1 minute)
-
-# Verify backend is sending metrics
-docker-compose logs backend | grep metric
-```
-
-### Issue: Authentication failing
-
-**Problem**: Login fails or token invalid
-
-**Solutions**:
-```bash
-# Check backend logs
-docker-compose logs backend | grep -i auth
-
-# Reset database
-docker-compose exec postgres psql -U clouduser -d cloudcost \
-  -c "DELETE FROM users"
-
-# Check JWT_SECRET_KEY is set
-cat .env | grep SECRET_KEY
-
-# Verify password hashing
-docker-compose logs backend | grep -i password
-```
-
-### Clear Everything & Start Fresh
-
-```bash
-# Stop all services
-docker-compose down
-
-# Remove all data (WARNING: destructive!)
-docker-compose down -v
-
-# Remove images
-docker-compose down --rmi all
-
-# Clean up
-docker system prune -a
-
-# Start fresh
-docker-compose build
-docker-compose up -d
 ```
 
 ---
 
-## Production Deployment
+### No VMs appear in the dashboard
+VMs are auto-discovered from Prometheus on first load. Check Prometheus is scraping:
+- Open http://localhost:9090/targets
+- All targets should show **UP**
 
-### Pre-Production Checklist
+If node-exporter is not listed, check `prometheus/prometheus.yml`.
 
-- [ ] Change all default passwords
-- [ ] Generate strong SECRET_KEY
-- [ ] Configure HTTPS/TLS
-- [ ] Set up external database backup
-- [ ] Configure persistent volumes
-- [ ] Set resource limits
-- [ ] Enable logging aggregation
-- [ ] Set up monitoring and alerting
-- [ ] Configure firewall rules
-- [ ] Test disaster recovery procedures
+---
 
-### Security Configuration
+### No billing data / charts empty
+Run a manual billing cycle first (see "First use" above). The automatic hourly scheduler runs billing every hour, but you need at least a few records before charts render.
 
-#### Environment Variables (Production)
+---
+
+### Database connection error
 ```bash
-# Generate strong secret key
-SECRET_KEY=$(openssl rand -hex 32)
-echo "SECRET_KEY=$SECRET_KEY" >> .env
-
-# Set strong database password
-POSTGRES_PASSWORD=$(openssl rand -base64 32)
-echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" >> .env
-
-# Update all services to use strong passwords
-# ... update docker-compose.yml accordingly
-```
-
-#### TLS/SSL Setup
-
-```yaml
-# Update docker-compose.yml for production
-services:
-  frontend:
-    environment:
-      - HTTPS=true
-      - SSL_CERT_FILE=/etc/ssl/certs/cert.pem
-      - SSL_KEY_FILE=/etc/ssl/private/key.pem
-    volumes:
-      - /path/to/cert.pem:/etc/ssl/certs/cert.pem
-      - /path/to/key.pem:/etc/ssl/private/key.pem
-```
-
-#### Database Backup
-
-```bash
-# Automated daily backup
-crontab -e
-
-# Add: backup database daily at 2 AM
-0 2 * * * docker exec postgres pg_dump -U clouduser cloudcost \
-  | gzip > /backups/cloudcost-$(date +\%Y\%m\%d).sql.gz
-```
-
-### Kubernetes Deployment (Optional)
-
-For Kubernetes deployment, convert docker-compose to Kubernetes manifests:
-
-```bash
-# Using Kompose tool
-kompose convert -f docker-compose.yml -o k8s/
-
-# This generates:
-# - Deployments for each service
-# - Services for networking
-# - PersistentVolumeClaims for data
-```
-
-### Multi-Machine Deployment
-
-For distributed setup:
-
-```yaml
-# docker-compose.production.yml
-version: '3.8'
-
-services:
-  backend:
-    deploy:
-      replicas: 3
-      placement:
-        constraints: [node.role == worker]
-    environment:
-      - REDIS_URL=redis://redis-master:6379
-
-  postgres:
-    deploy:
-      placement:
-        constraints: [node.labels.database == true]
-
-networks:
-  cloudnet:
-    driver: overlay
+docker compose logs postgres --tail=20
+docker compose restart postgres
+# Wait 10 seconds, then:
+docker compose restart backend
 ```
 
 ---
 
-## Backup & Recovery
-
-### Backup Procedures
-
-#### Full Backup
+### Clear everything and start fresh
 ```bash
-#!/bin/bash
-BACKUP_DIR=/backups
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+# Stops containers AND removes volumes (all data lost)
+docker compose down -v
 
-# Database backup
+# Rebuild and restart
+docker compose up -d --build
+```
+
+---
+
+## Production checklist
+
+Before deploying in any real environment:
+
+- [ ] Set a strong random `SECRET_KEY` (`secrets.token_hex(32)`)
+- [ ] Change `POSTGRES_PASSWORD` to a strong unique password
+- [ ] Change `ADMIN_DEFAULT_PASSWORD`
+- [ ] Change `GF_SECURITY_ADMIN_PASSWORD`
+- [ ] Set `ALLOWED_ORIGINS` to your actual frontend domain
+- [ ] Set `DASHBOARD_URL` to your actual frontend URL
+- [ ] Configure real SMTP credentials (or disable email)
+- [ ] Place a TLS-terminating reverse proxy (Nginx + Let's Encrypt) in front
+- [ ] Restrict PostgreSQL port (`5432`) from public access
+- [ ] Set up automated database backups
+
+### Backup the database
+```bash
 docker exec postgres pg_dump -U clouduser cloudcost | \
-  gzip > $BACKUP_DIR/db_$TIMESTAMP.sql.gz
-
-# Volume backups
-docker run --rm \
-  -v postgres_data:/data \
-  -v $BACKUP_DIR:/backup \
-  alpine tar czf /backup/postgres_data_$TIMESTAMP.tar.gz /data
-
-# Application configuration
-tar czf $BACKUP_DIR/config_$TIMESTAMP.tar.gz \
-  .env prometheus/ grafana/ nginx.conf
-
-echo "Backup completed: $BACKUP_DIR"
+  gzip > cloudcost-backup-$(date +%Y%m%d).sql.gz
 ```
 
-#### Scheduled Backups
+### Restore
 ```bash
-# Add to crontab
-0 2 * * * /path/to/backup-script.sh
-
-# Log rotations
-find /backups -name "*.gz" -mtime +30 -delete
-```
-
-### Recovery Procedures
-
-#### Restore Database
-```bash
-# Stop services
-docker-compose stop
-
-# Restore from backup
-gunzip < backup.sql.gz | \
+gunzip < cloudcost-backup-20260513.sql.gz | \
   docker exec -i postgres psql -U clouduser cloudcost
-
-# Restart services
-docker-compose start
-```
-
-#### Restore Volumes
-```bash
-# Stop services
-docker-compose down
-
-# Restore volume
-docker run --rm \
-  -v postgres_data:/data \
-  -v /path/to/backup:/backup \
-  alpine tar xzf /backup/postgres_data.tar.gz
-
-# Restart
-docker-compose up -d
-```
-
-#### Point-in-Time Recovery
-```bash
-# PostgreSQL WAL-based recovery
-# 1. Ensure WAL archiving is configured
-# 2. Restore from backup
-# 3. Replay WAL files to specific timestamp
-
-# Example
-docker exec postgres psql -U clouduser -c \
-  "CREATE DATABASE cloudcost_recovery"
-# Then use pg_basebackup and wal-e
 ```
 
 ---
 
-## Maintenance
-
-### Regular Maintenance Tasks
-
-#### Daily
-- Monitor service logs
-- Check disk space
-- Monitor alerts
-
-#### Weekly
-- Database maintenance (VACUUM)
-- Log rotation
-- Backup verification
-
-#### Monthly
-- Performance review
-- Security updates
-- Disaster recovery drill
-
-#### Quarterly
-- Dependency updates
-- Database optimization
-- Capacity planning
-
-### Common Maintenance Commands
-
-```bash
-# Database maintenance
-docker-compose exec postgres psql -U clouduser -d cloudcost \
-  -c "VACUUM ANALYZE"
-
-# Clean old logs
-docker-compose exec backend rm -f /var/log/cloudcost/*.log.1
-
-# Restart service
-docker-compose restart backend
-
-# Update images
-docker-compose pull
-docker-compose up -d
-
-# Monitor performance
-docker stats
-```
-
----
-
-## Support & Help
-
-- **Documentation**: https://docs.cloudcost.example.com
-- **Issues**: https://github.com/your-org/cloudcost/issues
-- **Community**: Slack/Discord channel
-- **Email**: support@cloudcost.example.com
-
----
-
-**Document Version**: 1.0.0  
-**Last Updated**: May 2, 2026
+**Document Version:** 2.0.0  
+**Last Updated:** May 2026
