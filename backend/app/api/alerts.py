@@ -1,27 +1,28 @@
+import os
+import uuid
+import logging
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+
 from app.database import get_db
-from app.models import Alert, VM
+from app.models import Alert, VM, User
 from app import prometheus_client as prom
-from datetime import datetime, timedelta
-from app.auth import get_current_user
-from app.models import User
-import uuid
+from app.auth import get_current_user, require_admin
 
-router = APIRouter(prefix="/alerts", tags=["alerts"])
+logger         = logging.getLogger(__name__)
+router         = APIRouter(prefix="/alerts", tags=["alerts"])
+DASHBOARD_URL  = os.getenv("DASHBOARD_URL", "http://localhost:3000")
 
-
-def require_admin(current_user: User = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
-    return current_user
 
 @router.get("/")
-async def list_alerts(status: str = "firing", db: AsyncSession = Depends(get_db)):
+async def list_alerts(
+    status: str    = "firing",
+    db:     AsyncSession = Depends(get_db),
+    _:      User         = Depends(get_current_user),
+):
     if status == "firing":
         result = await db.execute(
             select(Alert)
@@ -34,8 +35,12 @@ async def list_alerts(status: str = "firing", db: AsyncSession = Depends(get_db)
         )
     return result.scalars().all()
 
+
 @router.get("/summary")
-async def alert_summary(db: AsyncSession = Depends(get_db)):
+async def alert_summary(
+    db: AsyncSession = Depends(get_db),
+    _:  User         = Depends(get_current_user),
+):
     result = await db.execute(
         select(Alert).where(Alert.resolved_at == None)
     )
@@ -46,8 +51,13 @@ async def alert_summary(db: AsyncSession = Depends(get_db)):
         "total":    len(alerts),
     }
 
+
 @router.post("/{alert_id}/acknowledge")
-async def acknowledge(alert_id: str, db: AsyncSession = Depends(get_db)):
+async def acknowledge(
+    alert_id: str,
+    db:       AsyncSession = Depends(get_db),
+    _:        User         = Depends(get_current_user),
+):
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert  = result.scalars().first()
     if alert:
@@ -57,9 +67,13 @@ async def acknowledge(alert_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{alert_id}/resolve")
-async def resolve_alert(alert_id: str, db: AsyncSession = Depends(get_db)):
+async def resolve_alert(
+    alert_id: str,
+    db:       AsyncSession = Depends(get_db),
+    _:        User         = Depends(get_current_user),
+):
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
-    alert = result.scalars().first()
+    alert  = result.scalars().first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.resolved_at = datetime.utcnow()
@@ -70,7 +84,7 @@ async def resolve_alert(alert_id: str, db: AsyncSession = Depends(get_db)):
 @router.delete("/resolved")
 async def clear_resolved_alerts(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _:  User         = Depends(require_admin),
 ):
     result = await db.execute(delete(Alert).where(Alert.resolved_at != None))
     await db.commit()
@@ -80,14 +94,18 @@ async def clear_resolved_alerts(
 @router.delete("/all")
 async def clear_all_alerts(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    _:  User         = Depends(require_admin),
 ):
     result = await db.execute(delete(Alert))
     await db.commit()
     return {"status": "cleared", "scope": "all", "count": result.rowcount or 0}
 
+
 @router.post("/check")
-async def run_alert_check(db: AsyncSession = Depends(get_db)):
+async def run_alert_check(
+    db: AsyncSession = Depends(get_db),
+    _:  User         = Depends(require_admin),
+):
     from app.email_service import send_alert_email
     vms   = (await db.execute(select(VM))).scalars().all()
     fired = []
@@ -115,7 +133,6 @@ async def run_alert_check(db: AsyncSession = Depends(get_db)):
                 )
                 db.add(alert)
                 fired.append(vm.instance)
-                # Send real email notification
                 await send_alert_email(
                     to=vm.owner_email,
                     subject=f"[CloudCost] WARNING — Idle VM Detected: {vm.instance}",
@@ -135,19 +152,25 @@ This VM appears to be running but not doing useful work.
 Consider pausing or terminating it to reduce costs.
 
 Action required: Review this VM in your CloudCost dashboard.
-Dashboard: http://10.150.40.10:3000
+Dashboard: {DASHBOARD_URL}
 
-— CloudCost Monitor"""
+— CloudCost Monitor""",
                 )
     await db.commit()
+    logger.info("Alert check completed: %d idle VMs found", len(fired))
     return {"fired": len(fired), "vms": fired}
 
+
 @router.post("/test-email")
-async def test_email():
-    """Send a test alert email to verify Gmail SMTP is working."""
+async def test_email(
+    _: User = Depends(require_admin),
+):
+    """Send a test alert email — admin only."""
     from app.email_service import send_alert_email
+    import os
+    test_recipient = os.getenv("SMTP_USER") or "admin@cloudcost.local"
     result = await send_alert_email(
-        to="anaselsayed757@gmail.com",
+        to=test_recipient,
         subject="[CloudCost] Test Alert — System Working",
         body="""CloudCost Monitor — Test Email
 
@@ -155,12 +178,7 @@ Your alert notification system is working correctly.
 
 System: CloudCost Monitor
 Status: Operational
-Prometheus: Healthy
-Database: Connected
 
-This email confirms that real-time alert notifications
-are configured and working for your graduation project.
-
-— CloudCost Monitor"""
+— CloudCost Monitor""",
     )
-    return {"sent": result}
+    return {"sent": result, "to": test_recipient}

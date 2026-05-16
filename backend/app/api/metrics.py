@@ -1,10 +1,13 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app import prometheus_client as prom
+from app.auth import get_current_user
+from app.models import User
 
 router = APIRouter(prefix="/metrics-live", tags=["metrics"])
 
+
 @router.get("/")
-async def get_all_live_metrics():
+async def get_all_live_metrics(_: User = Depends(get_current_user)):
     instances = await prom.get_all_instances()
     results = []
     for inst in instances:
@@ -19,8 +22,9 @@ async def get_all_live_metrics():
         })
     return results
 
+
 @router.get("/{instance}")
-async def get_live_metrics(instance: str):
+async def get_live_metrics(instance: str, _: User = Depends(get_current_user)):
     cpu = await prom.get_cpu_usage(instance)
     ram = await prom.get_ram_usage(instance)
     net = await prom.get_network_bytes(instance)

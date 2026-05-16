@@ -1,34 +1,48 @@
-from fastapi import APIRouter, Depends
+import uuid
+import logging
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from app.database import get_db
 from app.models import VM, Tariff, Budget
 from app.prometheus_client import get_all_instances
+from app.auth import get_current_user, require_admin
+from app.models import User
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/vms", tags=["vms"])
 
+
 @router.get("/")
-async def list_vms(db: AsyncSession = Depends(get_db)):
+async def list_vms(
+    db: AsyncSession = Depends(get_db),
+    _:  User         = Depends(get_current_user),
+):
     result = await db.execute(select(VM))
     vms = result.scalars().all()
     if not vms:
         instances = await get_all_instances()
         for inst in instances:
-            vm = VM(
+            db.add(VM(
                 instance=inst,
                 label=inst,
                 tariff_id="standard",
                 cpu_cores=2.0,
                 ram_gb=2.0,
-            )
-            db.add(vm)
+            ))
         await db.commit()
         result = await db.execute(select(VM))
         vms = result.scalars().all()
     return vms
 
+
 @router.get("/{instance}/cost")
-async def get_vm_cost(instance: str, days: int = 7, db: AsyncSession = Depends(get_db)):
+async def get_vm_cost(
+    instance: str,
+    days: int = 7,
+    db:   AsyncSession = Depends(get_db),
+    _:    User         = Depends(get_current_user),
+):
     query = text("""
         SELECT DATE(period_start) as date,
                SUM(cpu_cost)      as cpu_cost,
@@ -45,13 +59,17 @@ async def get_vm_cost(instance: str, days: int = 7, db: AsyncSession = Depends(g
     rows = result.fetchall()
     return {
         "vm_instance": instance,
-        "days": days,
-        "records": [dict(r._mapping) for r in rows],
-        "total": sum(float(r.total_cost) for r in rows),
+        "days":        days,
+        "records":     [dict(r._mapping) for r in rows],
+        "total":       sum(float(r.total_cost) for r in rows),
     }
 
+
 @router.post("/seed")
-async def seed_tariffs(db: AsyncSession = Depends(get_db)):
+async def seed_tariffs(
+    db: AsyncSession = Depends(get_db),
+    _:  User         = Depends(require_admin),
+):
     result = await db.execute(select(Tariff))
     if not result.scalars().first():
         db.add(Tariff(
@@ -67,10 +85,16 @@ async def seed_tariffs(db: AsyncSession = Depends(get_db)):
             network_rate_per_gb=0.008,
         ))
         await db.commit()
+        logger.info("Default tariffs seeded")
     return {"status": "seeded"}
 
+
 @router.get("/{instance}/budget")
-async def get_budget(instance: str, db: AsyncSession = Depends(get_db)):
+async def get_budget(
+    instance: str,
+    db:       AsyncSession = Depends(get_db),
+    _:        User         = Depends(get_current_user),
+):
     result = await db.execute(
         select(Budget).where(Budget.vm_instance == instance)
     )
@@ -79,10 +103,15 @@ async def get_budget(instance: str, db: AsyncSession = Depends(get_db)):
         return {"exists": False}
     return {"exists": True, "budget": budget}
 
+
 @router.post("/{instance}/budget")
-async def set_budget(instance: str, limit: float,
-                     email: str = "admin@cloudcost.local",
-                     db: AsyncSession = Depends(get_db)):
+async def set_budget(
+    instance: str,
+    limit:    float,
+    email:    str          = "admin@cloudcost.local",
+    db:       AsyncSession = Depends(get_db),
+    _:        User         = Depends(require_admin),
+):
     result = await db.execute(
         select(Budget).where(Budget.vm_instance == instance)
     )
@@ -91,9 +120,8 @@ async def set_budget(instance: str, limit: float,
         budget.monthly_limit = limit
         budget.owner_email   = email
     else:
-        from app.models import Budget as BudgetModel
-        db.add(BudgetModel(
-            id=str(__import__('uuid').uuid4()),
+        db.add(Budget(
+            id=str(uuid.uuid4()),
             vm_instance=instance,
             monthly_limit=limit,
             owner_email=email,
@@ -101,15 +129,17 @@ async def set_budget(instance: str, limit: float,
     await db.commit()
     return {"status": "saved", "vm": instance, "limit": limit}
 
+
 @router.put("/{instance}/label")
-async def update_label(instance: str, label: str,
-                       db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(VM).where(VM.instance == instance)
-    )
+async def update_label(
+    instance: str,
+    label:    str,
+    db:       AsyncSession = Depends(get_db),
+    _:        User         = Depends(require_admin),
+):
+    result = await db.execute(select(VM).where(VM.instance == instance))
     vm = result.scalars().first()
     if not vm:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="VM not found")
     vm.label = label
     await db.commit()
