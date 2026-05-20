@@ -2,20 +2,12 @@ import { useCallback } from "react";
 import { usePolling } from "../hooks/usePolling";
 import { api } from "../api/client";
 
-export function StatusBar() {
+export function StatusBar({ theme }) {
   const fetchSummary = useCallback(() => api.getAlertSummary(), []);
   const { data } = usePolling(fetchSummary, 15000);
 
   return (
-    <header style={{
-      display: "flex", alignItems: "center", gap: 16,
-      padding: "12px 24px", background: "#1e1e2e",
-      borderBottom: "1px solid #333", flexWrap: "wrap"
-    }}>
-      <span style={{ fontWeight: 600, fontSize: 18, color: "#fff" }}>
-        ☁ CloudCost Monitor
-      </span>
-
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {data?.critical > 0 && (
         <span style={{ background: "#ff4444", color: "#fff",
           borderRadius: 5, padding: "2px 10px", fontSize: 12 }}>
@@ -34,10 +26,9 @@ export function StatusBar() {
           All systems healthy
         </span>
       )}
-
-      <span style={{ marginLeft: "auto", fontSize: 12, color: "#888" }}>
+      <span style={{ fontSize: 12, color: theme?.textSub || "#888" }}>
         Last updated: {new Date().toLocaleTimeString()}
       </span>
-    </header>
+    </div>
   );
 }

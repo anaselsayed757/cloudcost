@@ -112,10 +112,10 @@ export function UserManagement({ theme }) {
         )}
       </div>
 
-      {users.length > 0 && (
+      {(users || []).length > 0 && (
         <div>
           <div style={{ fontSize: 11, color: textSub, marginBottom: 8 }}>Registered users</div>
-          {users.map(u => (
+          {(users || []).map(u => (
             <div key={u.id} style={{
               display: "flex", alignItems: "center", gap: 12,
               padding: "8px 12px", borderRadius: 8,
